@@ -523,33 +523,59 @@ function renderPrint(nums) {
     }
     const pageEnd = j; // items [i, pageEnd) belong on this page
     const total = heights.length ? heights[heights.length - 1] : 0;
+    const isLastPage = pageEnd === flow.length; // no more items after this page
 
-    // Step 2: walk left to right, handing each column a target share of the
-    // remaining height (remaining total / remaining columns), capped at a
-    // single column's own budget, greedily including items up to that target.
+    // Step 2: decide how to split this page's items across columns.
     const colRanges = []; // [start, end) index pairs into flow
     let cur = i;
-    for (let c = 0; c < NUM_COLS; c++) {
-      if (c === NUM_COLS - 1) {
-        colRanges.push([cur, pageEnd]);
-        break;
+    if (isLastPage) {
+      // The last page doesn't need to be stretched across all NUM_COLS columns:
+      // fill column 1 to its budget first, then overflow into column 2, then 3,
+      // leaving any columns that aren't needed empty rather than spreading
+      // content thin to balance all three.
+      for (let c = 0; c < NUM_COLS; c++) {
+        if (cur >= pageEnd) { colRanges.push([cur, cur]); continue; }
+        const prevHeight = cur > i ? heights[cur - i - 1] : 0;
+        let splitAt = cur;
+        for (let k = cur; k < pageEnd; k++) {
+          const hSoFar = heights[k - i] - prevHeight;
+          if (hSoFar <= colBudgetPx) {
+            splitAt = k + 1;
+          } else {
+            break;
+          }
+        }
+        if (splitAt <= cur) splitAt = Math.min(cur + 1, pageEnd); // always keep at least 1 item
+        colRanges.push([cur, splitAt]);
+        cur = splitAt;
       }
-      const prevHeight = cur > i ? heights[cur - i - 1] : 0;
-      const remainingTotal = total - prevHeight;
-      const remainingCols = NUM_COLS - c;
-      const target = Math.min(remainingTotal / remainingCols, colBudgetPx);
-      let splitAt = cur;
-      for (let k = cur; k < pageEnd; k++) {
-        const hSoFar = heights[k - i] - prevHeight;
-        if (hSoFar <= target) {
-          splitAt = k + 1;
-        } else {
+    } else {
+      // Not the last page: walk left to right, handing each column a target
+      // share of the remaining height (remaining total / remaining columns),
+      // capped at a single column's own budget, so every column on a full
+      // page ends up filled about evenly.
+      for (let c = 0; c < NUM_COLS; c++) {
+        if (c === NUM_COLS - 1) {
+          colRanges.push([cur, pageEnd]);
           break;
         }
+        const prevHeight = cur > i ? heights[cur - i - 1] : 0;
+        const remainingTotal = total - prevHeight;
+        const remainingCols = NUM_COLS - c;
+        const target = Math.min(remainingTotal / remainingCols, colBudgetPx);
+        let splitAt = cur;
+        for (let k = cur; k < pageEnd; k++) {
+          const hSoFar = heights[k - i] - prevHeight;
+          if (hSoFar <= target) {
+            splitAt = k + 1;
+          } else {
+            break;
+          }
+        }
+        if (splitAt <= cur) splitAt = Math.min(cur + 1, pageEnd); // always keep at least 1 item
+        colRanges.push([cur, splitAt]);
+        cur = splitAt;
       }
-      if (splitAt <= cur) splitAt = Math.min(cur + 1, pageEnd); // always keep at least 1 item
-      colRanges.push([cur, splitAt]);
-      cur = splitAt;
     }
 
     function htmlForRange(range) {
@@ -578,10 +604,12 @@ function renderPrint(nums) {
     }
     while (finalRanges.length < NUM_COLS) finalRanges.push([pageEndActual, pageEndActual]);
 
-    const colsHtml = finalRanges.map(r => {
-      const numBox = `<div class="col-num">${colNumber++}</div>`;
-      return numBox + htmlForRange(r);
-    });
+    const colsHtml = finalRanges
+      .filter(r => r[1] > r[0]) // drop empty columns entirely (no box, no column) rather than render blank ones
+      .map(r => {
+        const numBox = `<div class="col-num">${colNumber++}</div>`;
+        return numBox + htmlForRange(r);
+      });
 
     pages.push({ headerHtml: isFirstPage ? headerHtml : '', colsHtml });
     if (pageEndActual === i) break; // safety valve against an infinite loop
