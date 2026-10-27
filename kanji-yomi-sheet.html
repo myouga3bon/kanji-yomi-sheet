@@ -117,15 +117,20 @@
 
   .columns { column-count: 2; column-gap: 10mm; column-rule: 0.4pt solid #bbb; }
   section.title-block { margin-bottom: 4mm; }
-  /* Reading print uses an explicit two-flex-column layout (JS pre-splits items
-     between .col.left and .col.right) instead of CSS column-count, because
-     Chromium's column-balance algorithm has a rendering bug (text clipping/
-     overlap) that reliably reproduces once print content approaches a full
-     page's height. Two independent block-flow columns avoid it entirely. */
-  .print-flexcols { display: flex; align-items: flex-start; }
-  .print-flexcols .col { flex: 1 1 0; min-width: 0; padding: 0 5mm; }
-  .print-flexcols .col.left { padding-left: 0; }
-  .print-flexcols .col.right { border-left: 0.4pt solid #bbb; padding-right: 0; }
+  /* Reading print uses an explicit N-column grid layout (JS pre-splits items
+     into .col elements, one per grid column) instead of CSS column-count,
+     because Chromium's column-balance algorithm has a rendering bug (text
+     clipping/overlap) that reliably reproduces once print content approaches
+     a full page's height. Independent block-flow columns avoid it entirely;
+     CSS Grid with 1fr tracks guarantees every column is exactly equal width. */
+  .print-flexcols { display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 7mm; align-items: start; }
+  .print-flexcols .col { min-width: 0; }
+  .print-flexcols .col:not(:first-child) { border-left: 0.4pt solid #bbb; }
+  .col-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 5.5mm; height: 5.5mm; border: 0.9pt solid #333;
+    font-size: 9pt; font-weight: bold; color: #333; margin-bottom: 2mm;
+  }
   h2.section-title {
     font-size: 10.5pt; background: #333; color: #fff; padding: 1.2mm 2.5mm;
     margin: 0 0 1.8mm; break-after: avoid; break-inside: avoid;
@@ -463,14 +468,21 @@ function renderPrint(nums) {
   const printContent = document.getElementById('printContent');
   printContent.innerHTML = '';
 
+  const NUM_COLS = 3;
+  const PAGE_CONTENT_MM = 186; // 210mm - 12mm*2 page margins
+  const COL_GAP_MM = 7;
+  const COL_WIDTH_MM = (PAGE_CONTENT_MM - COL_GAP_MM * (NUM_COLS - 1)) / NUM_COLS;
+
   // Scratch element used purely for single-column height measurement
   // (never uses column-count, so the Chromium column-balance bug can't fire).
+  // Its width matches one .print-flexcols grid column exactly (equal-width
+  // grid tracks, so every column's real content width is the same value).
   const scratch = document.createElement('div');
   scratch.style.position = 'absolute';
   scratch.style.left = '-9999px';
   scratch.style.top = '0';
   scratch.style.visibility = 'hidden';
-  scratch.style.width = '88mm'; // one .print-flexcols column's approx width
+  scratch.style.width = COL_WIDTH_MM + 'mm';
   document.body.appendChild(scratch);
 
   function measureHtml(html) {
@@ -480,25 +492,28 @@ function renderPrint(nums) {
 
   const usableHeightPx = mmToPx(273 - 2); // 297mm - 12mm*2 page margins, minus a small safety margin
   const headerHeightPx = measureHtml(headerHtml); // includes the header's own margin-bottom (collapses into this measurement)
+  const colNumHeightPx = measureHtml('<div class="col-num">1</div>'); // same for every column, every page
 
   let i = 0;
   let pageIndex = 0;
-  const pages = []; // array of {headerHtml, leftHtml, rightHtml}
+  let colNumber = 1; // numbers every column sequentially across the whole document
+  const pages = []; // array of { headerHtml, colsHtml: [html, html, html] }
 
   while (i < flow.length) {
     const isFirstPage = pageIndex === 0;
-    const colBudgetPx = isFirstPage ? (usableHeightPx - headerHeightPx) : usableHeightPx;
+    const colBudgetPx = (isFirstPage ? (usableHeightPx - headerHeightPx) : usableHeightPx) - colNumHeightPx;
 
     // Step 1: figure out how many items belong on this page at all, by
-    // measuring them as a single (unsplit) column and capping at ~2x one
-    // column's budget (since they'll shortly be divided across two columns).
+    // measuring them as a single (unsplit) column and capping at ~NUM_COLS x
+    // one column's budget (since they'll shortly be divided across NUM_COLS
+    // columns).
     let wholeHtml = '';
     let heights = []; // cumulative height after adding item k
     let j = i;
     while (j < flow.length) {
       const candidate = wholeHtml + itemHtml(flow[j], wholeHtml === '');
       const h = measureHtml(candidate);
-      if (h <= colBudgetPx * 2 || wholeHtml === '') {
+      if (h <= colBudgetPx * NUM_COLS || wholeHtml === '') {
         wholeHtml = candidate;
         heights.push(h);
         j++;
@@ -507,48 +522,76 @@ function renderPrint(nums) {
       }
     }
     const pageEnd = j; // items [i, pageEnd) belong on this page
-
-    // Step 2: split [i, pageEnd) between left/right columns, choosing the
-    // split point whose left-column height is closest to (but not over) half
-    // of the total, while also never exceeding a single column's own budget.
     const total = heights.length ? heights[heights.length - 1] : 0;
-    const target = Math.min(total / 2, colBudgetPx);
-    let splitAt = i; // index (within flow) where the right column starts
-    for (let k = i; k < pageEnd; k++) {
-      const hSoFar = heights[k - i];
-      if (hSoFar <= target) {
-        splitAt = k + 1;
-      } else {
+
+    // Step 2: walk left to right, handing each column a target share of the
+    // remaining height (remaining total / remaining columns), capped at a
+    // single column's own budget, greedily including items up to that target.
+    const colRanges = []; // [start, end) index pairs into flow
+    let cur = i;
+    for (let c = 0; c < NUM_COLS; c++) {
+      if (c === NUM_COLS - 1) {
+        colRanges.push([cur, pageEnd]);
         break;
       }
+      const prevHeight = cur > i ? heights[cur - i - 1] : 0;
+      const remainingTotal = total - prevHeight;
+      const remainingCols = NUM_COLS - c;
+      const target = Math.min(remainingTotal / remainingCols, colBudgetPx);
+      let splitAt = cur;
+      for (let k = cur; k < pageEnd; k++) {
+        const hSoFar = heights[k - i] - prevHeight;
+        if (hSoFar <= target) {
+          splitAt = k + 1;
+        } else {
+          break;
+        }
+      }
+      if (splitAt <= cur) splitAt = Math.min(cur + 1, pageEnd); // always keep at least 1 item
+      colRanges.push([cur, splitAt]);
+      cur = splitAt;
     }
-    if (splitAt <= i) splitAt = Math.min(i + 1, pageEnd); // always keep at least 1 item left
 
-    let leftHtml = '';
-    for (let k = i; k < splitAt; k++) leftHtml += itemHtml(flow[k], k === i);
-    let rightHtml = '';
-    for (let k = splitAt; k < pageEnd; k++) rightHtml += itemHtml(flow[k], k === splitAt);
-
-    // Safety: if the right column ended up taller than its own budget
-    // (possible when a single item dominates), shrink it back by moving
-    // trailing items to the next page.
-    let rightEnd = pageEnd;
-    while (rightEnd > splitAt && measureHtml(rightHtml) > colBudgetPx) {
-      rightEnd--;
-      rightHtml = '';
-      for (let k = splitAt; k < rightEnd; k++) rightHtml += itemHtml(flow[k], k === splitAt);
+    function htmlForRange(range) {
+      let h = '';
+      for (let k = range[0]; k < range[1]; k++) h += itemHtml(flow[k], k === range[0]);
+      return h;
     }
 
-    pages.push({ headerHtml: isFirstPage ? headerHtml : '', leftHtml, rightHtml });
-    const consumed = rightEnd;
-    if (consumed === i) break; // safety valve against an infinite loop
-    i = consumed;
+    // Safety: walk the columns in order; if one ended up taller than its own
+    // budget (possible when a single item dominates), shrink it back by
+    // moving its trailing items — and every column after it on this page —
+    // to the next page, rather than letting content overflow the sheet.
+    let pageEndActual = i;
+    const finalRanges = [];
+    for (let c = 0; c < NUM_COLS; c++) {
+      let [start, end] = colRanges[c];
+      if (start >= end && start > pageEndActual) { finalRanges.push([start, start]); continue; }
+      let html = htmlForRange([start, end]);
+      while (end > start && measureHtml(html) > colBudgetPx) {
+        end--;
+        html = htmlForRange([start, end]);
+      }
+      finalRanges.push([start, end]);
+      pageEndActual = Math.max(pageEndActual, end);
+      if (end < colRanges[c][1]) break; // this column got shrunk — stop placing items in later columns this page
+    }
+    while (finalRanges.length < NUM_COLS) finalRanges.push([pageEndActual, pageEndActual]);
+
+    const colsHtml = finalRanges.map(r => {
+      const numBox = `<div class="col-num">${colNumber++}</div>`;
+      return numBox + htmlForRange(r);
+    });
+
+    pages.push({ headerHtml: isFirstPage ? headerHtml : '', colsHtml });
+    if (pageEndActual === i) break; // safety valve against an infinite loop
+    i = pageEndActual;
     pageIndex++;
   }
 
   document.body.removeChild(scratch);
 
-  const pagesHtml = pages.map(p => `<div class="page">${p.headerHtml}<div class="print-flexcols"><div class="col left">${p.leftHtml}</div><div class="col right">${p.rightHtml}</div></div></div>`).join('');
+  const pagesHtml = pages.map(p => `<div class="page">${p.headerHtml}<div class="print-flexcols">${p.colsHtml.map(h => `<div class="col">${h}</div>`).join('')}</div></div>`).join('');
   printContent.innerHTML = pagesHtml;
 }
 
