@@ -122,9 +122,10 @@
      Chromium's column-balance algorithm has a rendering bug (text clipping/
      overlap) that reliably reproduces once print content approaches a full
      page's height. Two independent block-flow columns avoid it entirely. */
-  .print-flexcols { display: flex; gap: 10mm; align-items: flex-start; }
-  .print-flexcols .col { flex: 1 1 0; min-width: 0; }
-  .print-flexcols .col.right { border-left: 0.4pt solid #bbb; padding-left: 10mm; }
+  .print-flexcols { display: flex; align-items: flex-start; }
+  .print-flexcols .col { flex: 1 1 0; min-width: 0; padding: 0 5mm; }
+  .print-flexcols .col.left { padding-left: 0; }
+  .print-flexcols .col.right { border-left: 0.4pt solid #bbb; padding-right: 0; }
   h2.section-title {
     font-size: 10.5pt; background: #333; color: #fff; padding: 1.2mm 2.5mm;
     margin: 0 0 1.8mm; break-after: avoid; break-inside: avoid;
@@ -477,8 +478,8 @@ function renderPrint(nums) {
     return scratch.getBoundingClientRect().height;
   }
 
-  const usableHeightPx = mmToPx(273 - 6);
-  const headerHeightPx = measureHtml(headerHtml) + mmToPx(3);
+  const usableHeightPx = mmToPx(273 - 2); // 297mm - 12mm*2 page margins, minus a small safety margin
+  const headerHeightPx = measureHtml(headerHtml); // includes the header's own margin-bottom (collapses into this measurement)
 
   let i = 0;
   let pageIndex = 0;
