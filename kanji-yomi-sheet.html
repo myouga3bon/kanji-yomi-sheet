@@ -207,7 +207,18 @@
       box-shadow: none; margin: 0; width: auto; min-height: 0;
       height: auto !important; overflow: visible !important; padding: 0;
     }
-    .page + .page { break-before: page; }
+    /* break-before every .page, not just "a .page right after a .page" —
+       the reading-test printout has a hidden .page-label (no-print) element
+       sitting between the question pages and the answer page in the DOM, so
+       the adjacent-sibling form (.page + .page) silently stopped matching
+       there even though .page-label renders as nothing: sibling combinators
+       match the DOM tree, not the rendered boxes, display:none included.
+       That let the answer page's header render as a continuation of the
+       last question page instead of starting a fresh physical sheet.
+       break-before:page on every .page (including the very first) is safe —
+       browsers don't insert a blank leading page for a forced break on the
+       first box of the print context. */
+    .page { break-before: page; }
     @page { size: A4; margin: 12mm; }
   }
 </style>
@@ -401,57 +412,267 @@ function mmToPx(mm) {
 // Shrinks bodyEl (a .columns-like block) so its natural (auto-height, balanced-column)
 // rendered height fits within maxHeightPx. Escalates column count if even the
 // smallest readable size does not fit. Mutates bodyEl's inline styles.
-function shrinkToFit(bodyEl, maxHeightPxRaw, minCols, maxCols) {
-  const FLOOR_K = 0.36;
+// floorK is the smallest shrink multiplier it will try (default 0.36, a
+// readable floor for the normal check-test content) — callers with denser,
+// more compact rows (and a hard "must fit on one page" requirement) can pass
+// a smaller floor so a worst-case-large selection still fits rather than
+// getting silently clipped by the page's overflow:hidden.
+function shrinkToFit(bodyEl, maxHeightPxRaw, minCols, maxCols, floorK) {
+  const FLOOR_K = floorK || 0.36;
   // leave a safety margin: browsers' on-screen measurement and the final paginated
   // print render can differ by a few px, so target slightly under the true budget.
   const maxHeightPx = maxHeightPxRaw * 0.965;
 
-  let best = null; // remember the best (largest-cols) attempt even if it doesn't fully fit
+  // Goal: pick the column count that lets the content fit with the LARGEST
+  // k (most readable) — not just the first column count that happens to fit
+  // at all, which can pick a needlessly tiny font while most of the page
+  // sits blank. A full 20-step binary search at EVERY column count from
+  // minCols to maxCols would find the true optimum but is far too slow once
+  // content is large (each reflow re-balances thousands of DOM nodes). So
+  // this samples a handful of column-count checkpoints, runs a quick coarse
+  // binary search at each to estimate its achievable k directly (narrower
+  // columns that force extra line-wraps naturally score a lower k here, so
+  // this doesn't need a separate wrapping penalty), keeps the checkpoint
+  // with the largest k, then does one precise binary search there for the
+  // final value.
+  // A fixed, small number of evenly-spaced checkpoints regardless of the
+  // minCols..maxCols span, so cost stays predictable (and each reflow gets
+  // slower the larger the content is, so keeping the *count* of reflows
+  // small matters more than ever for a big selection).
+  const NUM_CHECKPOINTS = 4;
+  const checkpoints = [];
+  for (let i = 0; i < NUM_CHECKPOINTS; i++) {
+    const c = Math.round(minCols + (maxCols - minCols) * i / (NUM_CHECKPOINTS - 1));
+    if (!checkpoints.includes(c)) checkpoints.push(c);
+  }
 
-  for (let cols = minCols; cols <= maxCols; cols++) {
+  let fullSizeFit = null;
+  for (const cols of checkpoints) {
     bodyEl.style.columnCount = String(cols);
     bodyEl.style.setProperty('--k', '1');
-    let h = bodyEl.getBoundingClientRect().height;
-    if (h <= maxHeightPx) return { cols, k: 1 };
+    const h = bodyEl.getBoundingClientRect().height;
+    if (h <= maxHeightPx) { fullSizeFit = cols; break; }
+  }
+  if (fullSizeFit !== null) {
+    bodyEl.style.columnCount = String(fullSizeFit);
+    bodyEl.style.setProperty('--k', '1');
+    return { cols: fullSizeFit, k: 1 };
+  }
 
-    // check whether the floor size even fits at this column count before
-    // trusting it as the binary-search lower bound
+  let bestCols = null, bestK = -1;
+  let bestOverflow = null; // smallest-height attempt among checkpoints that don't fit even at the floor
+  for (const cols of checkpoints) {
+    bodyEl.style.columnCount = String(cols);
     bodyEl.style.setProperty('--k', FLOOR_K.toFixed(3));
-    let hFloor = bodyEl.getBoundingClientRect().height;
+    const hFloor = bodyEl.getBoundingClientRect().height;
     if (hFloor > maxHeightPx) {
-      best = { cols, k: FLOOR_K, h: hFloor };
-      continue; // even the smallest readable size overflows at this column count -> more columns
+      if (!bestOverflow || hFloor < bestOverflow.h) bestOverflow = { cols, k: FLOOR_K, h: hFloor };
+      continue;
     }
-
     let lo = FLOOR_K, hi = 1;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 5; i++) { // coarse — just enough to rank checkpoints against each other
       const mid = (lo + hi) / 2;
       bodyEl.style.setProperty('--k', mid.toFixed(3));
-      h = bodyEl.getBoundingClientRect().height;
+      const h = bodyEl.getBoundingClientRect().height;
       if (h <= maxHeightPx) lo = mid; else hi = mid;
     }
-    bodyEl.style.setProperty('--k', lo.toFixed(3));
-    h = bodyEl.getBoundingClientRect().height;
-    best = { cols, k: lo, h };
-    if (h <= maxHeightPx) return { cols, k: lo };
-    // else: even at floor size it doesn't fit at this column count -> try more columns
+    if (lo > bestK) { bestK = lo; bestCols = cols; }
   }
-  // exhausted maxCols without a guaranteed fit: fall back to the last (most-columns) attempt
-  if (best) {
-    bodyEl.style.columnCount = String(best.cols);
-    bodyEl.style.setProperty('--k', best.k.toFixed(3));
+
+  if (bestCols === null) {
+    // Doesn't fit even at the floor size at any checkpoint — last resort,
+    // use the smallest-height one anyway so nothing is clipped more than necessary.
+    if (bestOverflow) {
+      bodyEl.style.columnCount = String(bestOverflow.cols);
+      bodyEl.style.setProperty('--k', bestOverflow.k.toFixed(3));
+    }
+    return bestOverflow;
   }
-  return best;
+
+  // Final, more precise binary search at the winning column count only.
+  bodyEl.style.columnCount = String(bestCols);
+  let lo = FLOOR_K, hi = 1;
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2;
+    bodyEl.style.setProperty('--k', mid.toFixed(3));
+    const h = bodyEl.getBoundingClientRect().height;
+    if (h <= maxHeightPx) lo = mid; else hi = mid;
+  }
+  bodyEl.style.setProperty('--k', lo.toFixed(3));
+  return { cols: bestCols, k: lo };
 }
 
 // Fits one .page's content (header + body) into a single A4 page area.
-function fitPageBody(pageEl, headerEl, bodyEl, minCols, maxCols) {
+function fitPageBody(pageEl, headerEl, bodyEl, minCols, maxCols, floorK) {
   const usableHeightPx = mmToPx(273 - 6); // 297mm - 12mm*2 padding, minus a safety margin
   const headerHeightPx = headerEl.getBoundingClientRect().height;
   const gapPx = mmToPx(3);
   const availPx = Math.max(usableHeightPx - headerHeightPx - gapPx, mmToPx(40));
-  shrinkToFit(bodyEl, availPx, minCols, maxCols);
+  shrinkToFit(bodyEl, availPx, minCols, maxCols, floorK);
+}
+
+// Lays `rows` (rendered one per line by rowHtmlFn) out into bodyEl as
+// explicit CSS Grid columns (.print-flexcols/.col) sized so everything is
+// guaranteed to fit within maxHeightPxRaw — WITHOUT ever using CSS
+// column-count. shrinkToFit()/fitPageBody() above rely on column-count's
+// auto-balance to measure height, which is exactly the Chromium
+// print-to-PDF bug paginateFlow() was written to avoid (see its comment):
+// column-count's balanced height, measured live on screen while .page.fixed
+// holds a fixed height + overflow:hidden, does NOT match what Chromium
+// actually renders once @media print strips that fixed height
+// (overflow:visible, height:auto) — confirmed by direct measurement to
+// differ by hundreds of px for the same content, and visually confirmed as
+// clipped/overlapping/missing text in an actual PDF render. Any layout
+// whose "does it fit" decision depends on column-count's balance height is
+// at risk the moment its content gets tall enough to need a lot of
+// columns/shrinking — exactly the one-page-no-matter-how-big case the
+// reading test's answer sheet requires.
+//
+// Row heights here are NOT uniform — answer rows wrap to 2-3 lines for
+// longer readings, and which rows land in which column matters a lot (an
+// equal-COUNT split can put several long rows in one column and make it far
+// taller than the others). So this measures every row's REAL height
+// individually (never column-count, so the bug can't fire — the same trick
+// paginateFlow uses) and balances columns by cumulative height, the same
+// greedy left-to-right approach paginateFlow already uses for a full page.
+function layoutRowsOnePage(rows, rowHtmlFn, bodyEl, maxHeightPxRaw, minCols, maxCols, floorK) {
+  const FLOOR_K = floorK || 0.36;
+  const maxHeightPx = maxHeightPxRaw * 0.965;
+  const PAGE_CONTENT_MM = 186; // 210mm - 12mm*2 page margins
+  const COL_GAP_MM = 5;
+  const n = rows.length;
+
+  const scratch = document.createElement('div');
+  scratch.style.position = 'absolute';
+  scratch.style.left = '-9999px';
+  scratch.style.top = '0';
+  scratch.style.visibility = 'hidden';
+  document.body.appendChild(scratch);
+
+  function colWidthMmFor(cols) {
+    return (PAGE_CONTENT_MM - COL_GAP_MM * (cols - 1)) / cols;
+  }
+
+  // Real per-row heights at a specific column width + font-scale. O(n)
+  // reflows — used sparingly (a handful of column-count checkpoints, plus
+  // one more at the final chosen column count).
+  function measureRowHeights(colWidthMm, k) {
+    scratch.style.width = colWidthMm + 'mm';
+    scratch.style.setProperty('--k', k);
+    const heights = new Array(n);
+    for (let i = 0; i < n; i++) {
+      scratch.innerHTML = rowHtmlFn(rows[i]);
+      heights[i] = scratch.getBoundingClientRect().height;
+    }
+    return heights;
+  }
+
+  // Balanced split by cumulative height: walk left to right, handing each
+  // column a target share of the remaining height (remaining total /
+  // remaining columns) — same approach as paginateFlow's non-last-page split.
+  function balancedSplit(heights, cols) {
+    const total = heights.reduce((a, b) => a + b, 0);
+    const ranges = [];
+    let idx = 0;
+    let remainingTotal = total;
+    for (let c = 0; c < cols; c++) {
+      if (c === cols - 1) { ranges.push([idx, n]); break; }
+      const remainingCols = cols - c;
+      const target = remainingTotal / remainingCols;
+      let acc = 0, splitAt = idx;
+      while (splitAt < n && acc < target) { acc += heights[splitAt]; splitAt++; }
+      if (splitAt <= idx) splitAt = Math.min(idx + 1, n);
+      ranges.push([idx, splitAt]);
+      remainingTotal -= acc;
+      idx = splitAt;
+    }
+    return ranges;
+  }
+
+  function maxColHeight(heights, ranges) {
+    let maxH = 0;
+    for (const [s, e] of ranges) {
+      let h = 0;
+      for (let i = s; i < e; i++) h += heights[i];
+      if (h > maxH) maxH = h;
+    }
+    return maxH;
+  }
+
+  // At a given column count, estimate the achievable k by measuring real
+  // row heights at k=1 and at the floor, then interpolating linearly in
+  // between (every row's CSS dimension here is `calc(X * var(--k))`, so a
+  // row's height scales ~linearly with k for a fixed wrap pattern — close
+  // enough for picking a candidate, and the final choice is re-verified
+  // against real measurements below before it's ever used).
+  function bestKForCols(cols) {
+    const w = colWidthMmFor(cols);
+    const h1 = measureRowHeights(w, 1);
+    const hFloor = measureRowHeights(w, FLOOR_K);
+    function heightsAt(k) {
+      const t = (k - FLOOR_K) / (1 - FLOOR_K);
+      return h1.map((h, i) => hFloor[i] + (h - hFloor[i]) * t);
+    }
+    if (maxColHeight(h1, balancedSplit(h1, cols)) <= maxHeightPx) return { k: 1, heights: h1 };
+    if (maxColHeight(hFloor, balancedSplit(hFloor, cols)) > maxHeightPx) {
+      return { k: FLOOR_K, heights: hFloor, overflow: maxColHeight(hFloor, balancedSplit(hFloor, cols)) };
+    }
+    let lo = FLOOR_K, hi = 1;
+    for (let i = 0; i < 10; i++) {
+      const mid = (lo + hi) / 2;
+      const hs = heightsAt(mid);
+      if (maxColHeight(hs, balancedSplit(hs, cols)) <= maxHeightPx) lo = mid; else hi = mid;
+    }
+    return { k: lo, heights: heightsAt(lo) };
+  }
+
+  const NUM_CHECKPOINTS = 4;
+  const checkpoints = [];
+  for (let i = 0; i < NUM_CHECKPOINTS; i++) {
+    const c = Math.round(minCols + (maxCols - minCols) * i / (NUM_CHECKPOINTS - 1));
+    if (!checkpoints.includes(c)) checkpoints.push(c);
+  }
+
+  let bestCols = null, bestK = -1;
+  let bestOverflow = null;
+  for (const cols of checkpoints) {
+    const r = bestKForCols(cols);
+    if (r.overflow !== undefined) {
+      if (!bestOverflow || r.overflow < bestOverflow.h) bestOverflow = { cols, k: r.k, h: r.overflow };
+      continue;
+    }
+    if (r.k > bestK) { bestK = r.k; bestCols = cols; }
+  }
+
+  let finalCols = bestCols !== null ? bestCols : (bestOverflow ? bestOverflow.cols : maxCols);
+  let finalK = bestCols !== null ? bestK : (bestOverflow ? bestOverflow.k : FLOOR_K);
+
+  // Final safety net: re-measure the REAL heights at the chosen (cols, k)
+  // exactly (not interpolated) and nudge k down a little at a time if the
+  // true balanced layout still comes in over budget — catches any drift
+  // from the linear-interpolation approximation above.
+  let heights = measureRowHeights(colWidthMmFor(finalCols), finalK);
+  let ranges = balancedSplit(heights, finalCols);
+  let guard = 0;
+  while (maxColHeight(heights, ranges) > maxHeightPx && finalK > FLOOR_K * 0.5 && guard < 20) {
+    finalK *= 0.92;
+    heights = measureRowHeights(colWidthMmFor(finalCols), finalK);
+    ranges = balancedSplit(heights, finalCols);
+    guard++;
+  }
+
+  document.body.removeChild(scratch);
+
+  const colsHtml = ranges
+    .filter(r => r[1] > r[0])
+    .map(r => {
+      let h = '';
+      for (let i = r[0]; i < r[1]; i++) h += rowHtmlFn(rows[i]);
+      return h;
+    });
+  bodyEl.innerHTML = `<div class="print-flexcols" style="grid-template-columns: repeat(${colsHtml.length}, 1fr); column-gap: ${COL_GAP_MM}mm;">${colsHtml.map(h => `<div class="col">${h}</div>`).join('')}</div>`;
+  bodyEl.style.setProperty('--k', finalK.toFixed(3));
+  return { cols: colsHtml.length, k: finalK };
 }
 
 // Chromium's print-to-PDF renderer has a reproducible bug where CSS
@@ -659,8 +880,9 @@ function renderPrint(nums) {
 }
 
 // 読みテスト：読みプリントと同じ単元・順番構成のまま、漢字の基本の読みと熟語の読みを
-// すべて空欄（番号つき）にしたテストを作る。空欄の番号は解答と対応しており、解答は
-// 別紙にはせず、同じ印刷物の最後（最終ページの続き）にまとめて載せる。
+// すべて空欄（番号つき）にしたテストを作る（問題は複数ページになってもよい）。
+// 解答は必ず別紙・必ず1枚に収める — shrinkToFit で文字サイズと列数を自動調整する
+// 既存の確認テストと同じ仕組みを使う。
 function renderReadingTest(nums) {
   const secs = DATA.sections.filter(s => nums.includes(s.num));
 
@@ -682,39 +904,69 @@ function renderReadingTest(nums) {
     });
   });
 
-  flow.push({ kind: 'answer-title' });
-  answers.forEach(a => flow.push({ kind: 'answer-row', a }));
-
   function itemHtml(item, isFirstInColumn) {
     if (item.kind === 'title') {
       const extraMargin = isFirstInColumn ? '' : ' style="margin-top:4mm;"';
       return `<h2 class="section-title"${extraMargin}>${item.sec.circled} ${escapeHtml(item.sec.title)}</h2>`;
     }
-    if (item.kind === 'test-kanji') {
-      const k = item.k;
-      let h = `<div class="kanji-block"><div class="kanji-head"><span class="kj">${escapeHtml(k.kanji)}</span><span class="blank-wrap"><span class="blank-num">(${item.headNum})</span><span class="blank-line"></span></span></div>`;
-      k.words.forEach(([w], idx) => {
-        h += `<div class="wordrow"><span class="word">${escapeHtml(w)}</span><span class="blank-wrap"><span class="blank-num">(${item.wordNums[idx]})</span><span class="blank-line"></span></span></div>`;
-      });
-      h += `</div>`;
-      return h;
-    }
-    if (item.kind === 'answer-title') {
-      const extraMargin = isFirstInColumn ? '' : ' style="margin-top:4mm;"';
-      return `<h2 class="section-title"${extraMargin}>解答</h2>`;
-    }
-    // answer-row
-    const a = item.a;
-    return `<div class="answer-row"><span class="num">${a.num}.</span><span class="word">${escapeHtml(a.label)}</span><span class="reading">${escapeHtml(a.reading)}</span></div>`;
+    const k = item.k;
+    let h = `<div class="kanji-block"><div class="kanji-head"><span class="kj">${escapeHtml(k.kanji)}</span><span class="blank-wrap"><span class="blank-num">(${item.headNum})</span><span class="blank-line"></span></span></div>`;
+    k.words.forEach(([w], idx) => {
+      h += `<div class="wordrow"><span class="word">${escapeHtml(w)}</span><span class="blank-wrap"><span class="blank-num">(${item.wordNums[idx]})</span><span class="blank-line"></span></span></div>`;
+    });
+    h += `</div>`;
+    return h;
   }
 
-  const headerHtml = `<div class="doc-header">
+  const qHeaderHtml = `<div class="doc-header">
     <h2>漢字 読みテスト（${DATA_BY_GRADE[currentGrade].label}）</h2>
     <div class="meta test-meta"><span>氏名：＿＿＿＿＿＿＿＿＿＿</span><span>点数：＿＿＿／＿＿＿</span><span>${todayStr()}</span></div>
   </div>`;
 
-  const pages = paginateFlow(flow, itemHtml, headerHtml);
-  document.getElementById('printContent').innerHTML = pagesToHtml(pages);
+  const pages = paginateFlow(flow, itemHtml, qHeaderHtml);
+  const questionsHtml = pagesToHtml(pages);
+
+  function answerRowHtml(a) {
+    return `<div class="answer-row"><span class="num">${a.num}.</span><span class="word">${escapeHtml(a.label)}</span><span class="reading">${escapeHtml(a.reading)}</span></div>`;
+  }
+
+  const aHeader = `<div class="doc-header">
+    <h2>漢字 読みテスト　解答（${DATA_BY_GRADE[currentGrade].label}）</h2>
+    <div class="meta"><span>${todayStr()}</span></div>
+  </div>`;
+
+  const container = document.getElementById('printContent');
+  container.innerHTML = `
+    <div class="page-label no-print">問題</div>
+    ${questionsHtml}
+    <div class="page-label no-print">解答</div>
+    <div class="page fixed" id="testAPage">
+      ${aHeader}
+      <div id="testABody"></div>
+    </div>
+  `;
+
+  const aPage = document.getElementById('testAPage');
+  const aHeaderEl = aPage.querySelector('.doc-header');
+  const aBody = document.getElementById('testABody');
+  // Reading-test answer lists can run much longer than the check-test's (every
+  // kanji's base reading is listed too, not just compound words), so allow far
+  // more columns and a much smaller floor size than the default — the content
+  // here is just "num. word reading", so it stays usable even very small, and
+  // "must always fit on one page" takes priority over a larger font.
+  //
+  // This uses layoutRowsOnePage() (explicit JS-split CSS Grid columns), NOT
+  // fitPageBody()/shrinkToFit() (CSS column-count): the answer sheet's "must
+  // fit on exactly 1 page" requirement means its layout always runs right up
+  // against the page's height limit, which is exactly where Chromium's
+  // print-to-PDF column-count balancing has been confirmed to render
+  // differently (and visibly corrupted) than the on-screen measurement used
+  // to decide the fit. See fitRowsExplicit()'s comment.
+  const usableHeightPx = mmToPx(273 - 6);
+  const headerHeightPx = aHeaderEl.getBoundingClientRect().height;
+  const gapPx = mmToPx(3);
+  const availPx = Math.max(usableHeightPx - headerHeightPx - gapPx, mmToPx(40));
+  layoutRowsOnePage(answers, answerRowHtml, aBody, availPx, 2, 24, 0.15);
 }
 
 function shuffle(arr) {
