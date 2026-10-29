@@ -37,6 +37,13 @@
   #generateBtn:hover { background: #954f65; }
   #generateBtn:disabled { background: #cda3ad; border-color: #cda3ad; color: #fff; }
 
+  #readingTestBtn {
+    background: #fff; color: #b5657d; border: 2px solid #b5657d;
+    font-weight: bold; padding: 9px 20px;
+  }
+  #readingTestBtn:hover { background: #fbe4e9; }
+  #readingTestBtn:disabled { opacity: 0.5; border-color: #cda3ad; color: #cda3ad; }
+
   #clearBtn { color: #a15a6d; border-color: #d79bab; }
 
   #countLabel { color: #7a5560; font-size: 0.9rem; }
@@ -141,14 +148,23 @@
     display: flex; align-items: baseline; justify-content: space-between;
     gap: 4mm; border-bottom: 0.8pt solid #333; padding-bottom: 0.3mm;
   }
-  .kanji-head .kj { font-size: 12.5pt; font-weight: bold; }
-  .kanji-head .kj-reading { font-size: 8.3pt; color: #555; white-space: nowrap; flex-shrink: 0; }
+  .kanji-head .kj { font-size: 12.5pt; font-weight: bold; flex-shrink: 0; }
+  /* readings are allowed to wrap onto a second line (right-aligned) instead of
+     forcing nowrap, which could otherwise push long readings past the column's
+     right edge when printed. */
+  .kanji-head .kj-reading { font-size: 8.3pt; color: #555; text-align: right; }
   .wordrow {
     display: flex; justify-content: space-between; align-items: baseline;
     gap: 4mm; padding: 0.4mm 0; font-size: 9pt;
   }
   .wordrow .word { }
-  .wordrow .reading { white-space: nowrap; color: #444; flex-shrink: 0; font-size: 8pt; }
+  .wordrow .reading { color: #444; font-size: 8pt; text-align: right; }
+
+  .blank-wrap { display: inline-flex; align-items: baseline; gap: 1mm; flex-shrink: 0; }
+  .blank-num { font-size: 7pt; color: #888; }
+  .blank-line { display: inline-block; border-bottom: 0.6pt solid #777; }
+  .kanji-head .blank-line { width: 22mm; }
+  .wordrow .blank-line { width: 16mm; }
 
   /* check-test styles: all sized via --k (shrink-to-fit multiplier, set by JS) */
   .test-columns, .answer-columns { column-gap: calc(8mm * var(--k, 1)); }
@@ -210,6 +226,7 @@
     <button id="clearBtn" type="button">クリア</button>
     <span id="countLabel"></span>
     <button id="generateBtn" type="button" disabled>読みプリントを作成 →</button>
+    <button id="readingTestBtn" type="button" disabled>読みテストを作成 →</button>
   </div>
   <div class="test-panel">
     <span class="desc">選択した単元の熟語から確認テスト（読みを書き込む形式）を作成します。問題1枚・解答1枚の構成です。</span>
@@ -242,6 +259,7 @@ let DATA = DATA_BY_GRADE[currentGrade].data;
 const unitGrid = document.getElementById('unitGrid');
 const countLabel = document.getElementById('countLabel');
 const generateBtn = document.getElementById('generateBtn');
+const readingTestBtn = document.getElementById('readingTestBtn');
 const plainTestBtn = document.getElementById('plainTestBtn');
 const mixedTestBtn = document.getElementById('mixedTestBtn');
 
@@ -298,6 +316,7 @@ function updateCount() {
   countLabel.textContent = nums.length ? `選択中: ${nums.length}単元 / ${kanjiCount}字` : '';
   const disabled = nums.length === 0;
   generateBtn.disabled = disabled;
+  readingTestBtn.disabled = disabled;
   plainTestBtn.disabled = disabled;
   mixedTestBtn.disabled = disabled;
 }
@@ -322,6 +341,13 @@ document.getElementById('generateBtn').addEventListener('click', () => {
   if (!nums.length) return;
   showPaper();
   renderPrint(nums);
+});
+
+readingTestBtn.addEventListener('click', () => {
+  const nums = getChecked();
+  if (!nums.length) return;
+  showPaper();
+  renderReadingTest(nums);
 });
 
 plainTestBtn.addEventListener('click', () => {
@@ -430,44 +456,18 @@ function fitPageBody(pageEl, headerEl, bodyEl, minCols, maxCols) {
 
 // Chromium's print-to-PDF renderer has a reproducible bug where CSS
 // column-count/column-balance content near a full page's height can render
-// with clipped/overlapping text. To avoid it entirely, renderPrint never uses
-// CSS multi-column layout: it measures items with plain single-column block
-// flow (no column-balance involved at all, so the bug can't trigger), uses
-// that to decide how many items fit per physical page, then splits that
-// page's items between two independent flex columns (.print-flexcols),
-// itself just ordinary block flow placed side-by-side.
-function renderPrint(nums) {
-  const secs = DATA.sections.filter(s => nums.includes(s.num));
-
-  // Flatten into a linear list of flow items in reading order.
-  const flow = [];
-  secs.forEach(s => {
-    flow.push({ kind: 'title', sec: s });
-    s.kanji_list.forEach(k => flow.push({ kind: 'kanji', sec: s, k }));
-  });
-
-  function itemHtml(item, isFirstInColumn) {
-    if (item.kind === 'title') {
-      const extraMargin = isFirstInColumn ? '' : ' style="margin-top:4mm;"';
-      return `<h2 class="section-title"${extraMargin}>${item.sec.circled} ${escapeHtml(item.sec.title)}</h2>`;
-    }
-    const k = item.k;
-    let h = `<div class="kanji-block"><div class="kanji-head"><span class="kj">${escapeHtml(k.kanji)}</span><span class="kj-reading">${escapeHtml(k.head_reading)}</span></div>`;
-    k.words.forEach(([w, r]) => {
-      h += `<div class="wordrow"><span class="word">${escapeHtml(w)}</span><span class="reading">${escapeHtml(r)}</span></div>`;
-    });
-    h += `</div>`;
-    return h;
-  }
-
-  const headerHtml = `<div class="doc-header">
-    <h2>漢字 読みプリント（${DATA_BY_GRADE[currentGrade].label}）</h2>
-    <div class="meta"><span>氏名：＿＿＿＿＿＿＿＿＿＿</span><span>${todayStr()}</span></div>
-  </div>`;
-
-  const printContent = document.getElementById('printContent');
-  printContent.innerHTML = '';
-
+// with clipped/overlapping text. To avoid it entirely, the print/test
+// renderers never use CSS multi-column layout: they measure items with plain
+// single-column block flow (no column-balance involved at all, so the bug
+// can't trigger), use that to decide how many items fit per physical page,
+// then split that page's items across independent grid columns
+// (.print-flexcols), itself just ordinary block flow placed side-by-side.
+//
+// paginateFlow() is the shared engine behind both the reading print and the
+// reading test: given a flat list of flow items (each an unbreakable chunk)
+// and a function that renders one item to HTML, it returns an array of
+// { headerHtml, colsHtml } pages.
+function paginateFlow(flow, itemHtml, headerHtml) {
   const NUM_COLS = 3;
   const PAGE_CONTENT_MM = 186; // 210mm - 12mm*2 page margins
   const COL_GAP_MM = 7;
@@ -618,9 +618,103 @@ function renderPrint(nums) {
   }
 
   document.body.removeChild(scratch);
+  return pages;
+}
 
-  const pagesHtml = pages.map(p => `<div class="page">${p.headerHtml}<div class="print-flexcols">${p.colsHtml.map(h => `<div class="col">${h}</div>`).join('')}</div></div>`).join('');
-  printContent.innerHTML = pagesHtml;
+function pagesToHtml(pages) {
+  return pages.map(p => `<div class="page">${p.headerHtml}<div class="print-flexcols">${p.colsHtml.map(h => `<div class="col">${h}</div>`).join('')}</div></div>`).join('');
+}
+
+function renderPrint(nums) {
+  const secs = DATA.sections.filter(s => nums.includes(s.num));
+
+  // Flatten into a linear list of flow items in reading order.
+  const flow = [];
+  secs.forEach(s => {
+    flow.push({ kind: 'title', sec: s });
+    s.kanji_list.forEach(k => flow.push({ kind: 'kanji', sec: s, k }));
+  });
+
+  function itemHtml(item, isFirstInColumn) {
+    if (item.kind === 'title') {
+      const extraMargin = isFirstInColumn ? '' : ' style="margin-top:4mm;"';
+      return `<h2 class="section-title"${extraMargin}>${item.sec.circled} ${escapeHtml(item.sec.title)}</h2>`;
+    }
+    const k = item.k;
+    let h = `<div class="kanji-block"><div class="kanji-head"><span class="kj">${escapeHtml(k.kanji)}</span><span class="kj-reading">${escapeHtml(k.head_reading)}</span></div>`;
+    k.words.forEach(([w, r]) => {
+      h += `<div class="wordrow"><span class="word">${escapeHtml(w)}</span><span class="reading">${escapeHtml(r)}</span></div>`;
+    });
+    h += `</div>`;
+    return h;
+  }
+
+  const headerHtml = `<div class="doc-header">
+    <h2>漢字 読みプリント（${DATA_BY_GRADE[currentGrade].label}）</h2>
+    <div class="meta"><span>氏名：＿＿＿＿＿＿＿＿＿＿</span><span>${todayStr()}</span></div>
+  </div>`;
+
+  const pages = paginateFlow(flow, itemHtml, headerHtml);
+  document.getElementById('printContent').innerHTML = pagesToHtml(pages);
+}
+
+// 読みテスト：読みプリントと同じ単元・順番構成のまま、漢字の基本の読みと熟語の読みを
+// すべて空欄（番号つき）にしたテストを作る。空欄の番号は解答と対応しており、解答は
+// 別紙にはせず、同じ印刷物の最後（最終ページの続き）にまとめて載せる。
+function renderReadingTest(nums) {
+  const secs = DATA.sections.filter(s => nums.includes(s.num));
+
+  let counter = 0;
+  const answers = []; // {num, label, reading}
+  const flow = [];
+  secs.forEach(s => {
+    flow.push({ kind: 'title', sec: s });
+    s.kanji_list.forEach(k => {
+      counter++;
+      const headNum = counter;
+      answers.push({ num: headNum, label: k.kanji, reading: k.head_reading });
+      const wordNums = k.words.map(([w, r]) => {
+        counter++;
+        answers.push({ num: counter, label: w, reading: r });
+        return counter;
+      });
+      flow.push({ kind: 'test-kanji', sec: s, k, headNum, wordNums });
+    });
+  });
+
+  flow.push({ kind: 'answer-title' });
+  answers.forEach(a => flow.push({ kind: 'answer-row', a }));
+
+  function itemHtml(item, isFirstInColumn) {
+    if (item.kind === 'title') {
+      const extraMargin = isFirstInColumn ? '' : ' style="margin-top:4mm;"';
+      return `<h2 class="section-title"${extraMargin}>${item.sec.circled} ${escapeHtml(item.sec.title)}</h2>`;
+    }
+    if (item.kind === 'test-kanji') {
+      const k = item.k;
+      let h = `<div class="kanji-block"><div class="kanji-head"><span class="kj">${escapeHtml(k.kanji)}</span><span class="blank-wrap"><span class="blank-num">(${item.headNum})</span><span class="blank-line"></span></span></div>`;
+      k.words.forEach(([w], idx) => {
+        h += `<div class="wordrow"><span class="word">${escapeHtml(w)}</span><span class="blank-wrap"><span class="blank-num">(${item.wordNums[idx]})</span><span class="blank-line"></span></span></div>`;
+      });
+      h += `</div>`;
+      return h;
+    }
+    if (item.kind === 'answer-title') {
+      const extraMargin = isFirstInColumn ? '' : ' style="margin-top:4mm;"';
+      return `<h2 class="section-title"${extraMargin}>解答</h2>`;
+    }
+    // answer-row
+    const a = item.a;
+    return `<div class="answer-row"><span class="num">${a.num}.</span><span class="word">${escapeHtml(a.label)}</span><span class="reading">${escapeHtml(a.reading)}</span></div>`;
+  }
+
+  const headerHtml = `<div class="doc-header">
+    <h2>漢字 読みテスト（${DATA_BY_GRADE[currentGrade].label}）</h2>
+    <div class="meta test-meta"><span>氏名：＿＿＿＿＿＿＿＿＿＿</span><span>点数：＿＿＿／＿＿＿</span><span>${todayStr()}</span></div>
+  </div>`;
+
+  const pages = paginateFlow(flow, itemHtml, headerHtml);
+  document.getElementById('printContent').innerHTML = pagesToHtml(pages);
 }
 
 function shuffle(arr) {
