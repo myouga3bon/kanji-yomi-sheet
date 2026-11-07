@@ -6,89 +6,127 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>漢字読みシートクリエーター</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;700;800&display=swap');
   * { box-sizing: border-box; }
   body {
-    font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+    font-family: "M PLUS Rounded 1c", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
     margin: 0;
-    background: #fbeef1;
+    background:
+      radial-gradient(circle at 8% 8%, #ffe3cf 0%, transparent 42%),
+      radial-gradient(circle at 95% 12%, #e6ddff 0%, transparent 45%),
+      linear-gradient(145deg, #ffeef5 0%, #fff6ee 45%, #f3ecff 100%);
+    background-attachment: fixed;
     color: #3a2830;
   }
   #selectView { max-width: 900px; margin: 0 auto; padding: 24px 20px 80px; }
-  h1 { font-size: 1.5rem; margin: 0 0 4px; color: #7a3b4e; }
-  .subtitle { color: #8a6470; font-size: 0.9rem; margin: 0 0 20px; }
+  h1 {
+    font-size: 1.8rem; margin: 0 0 4px; font-weight: 800;
+    background: linear-gradient(90deg, #ff5d8f, #ff9a56);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    letter-spacing: 0.02em;
+  }
+  .subtitle { color: #8a6470; font-size: 0.92rem; margin: 0 0 20px; }
 
   .toolbar {
     position: sticky; top: 0; z-index: 10;
-    background: #fbeef1ee; backdrop-filter: blur(4px);
+    background: #fff6f8d9; backdrop-filter: blur(6px);
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 10px 0; margin-bottom: 10px; border-bottom: 1px solid #e8c3cd;
+    padding: 12px 14px; margin-bottom: 14px; border-radius: 16px;
+    border: 1px solid #ffd3e0; box-shadow: 0 4px 16px rgba(255, 110, 150, 0.12);
   }
   button {
-    font-size: 0.95rem; padding: 8px 16px; border-radius: 6px;
+    font-size: 0.95rem; padding: 9px 18px; border-radius: 999px;
     border: 1px solid #d79bab; background: #fff; color: #7a3b4e; cursor: pointer;
+    font-family: inherit; font-weight: 700;
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
   }
-  button:hover { background: #fbe4e9; }
+  button:hover:not(:disabled) { background: #fff0f4; transform: translateY(-2px); box-shadow: 0 5px 12px rgba(181, 101, 125, 0.22); }
+  button:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
 
   #generateBtn {
-    margin-left: auto; background: #b5657d; color: #fff; border-color: #b5657d;
-    font-weight: bold; padding: 10px 22px;
+    margin-left: auto; color: #fff; border: none;
+    background: linear-gradient(135deg, #ff6f91, #ff5d8f);
+    font-weight: 800; padding: 11px 24px;
+    box-shadow: 0 5px 14px rgba(255, 93, 143, 0.4);
   }
-  #generateBtn:hover { background: #954f65; }
-  #generateBtn:disabled { background: #cda3ad; border-color: #cda3ad; color: #fff; }
+  #generateBtn:hover:not(:disabled) { background: linear-gradient(135deg, #ff5d8f, #e8406f); box-shadow: 0 7px 16px rgba(255, 93, 143, 0.5); }
+  #generateBtn:disabled { background: #e7bfca; border-color: #e7bfca; color: #fff; box-shadow: none; }
 
   #readingTestBtn {
-    background: #fff; color: #b5657d; border: 2px solid #b5657d;
-    font-weight: bold; padding: 9px 20px;
+    background: #fff; color: #ff5d8f; border: 2px solid #ff9ab4;
+    font-weight: 800; padding: 10px 22px;
   }
-  #readingTestBtn:hover { background: #fbe4e9; }
+  #readingTestBtn:hover:not(:disabled) { background: #fff0f4; border-color: #ff5d8f; }
   #readingTestBtn:disabled { opacity: 0.5; border-color: #cda3ad; color: #cda3ad; }
 
   #clearBtn { color: #a15a6d; border-color: #d79bab; }
 
-  #countLabel { color: #7a5560; font-size: 0.9rem; }
+  #countLabel {
+    color: #954f65; font-size: 0.85rem; font-weight: 700;
+    background: #ffe3ec; border-radius: 999px; padding: 6px 14px;
+  }
 
   .grade-switch {
-    display: flex; gap: 0; margin-bottom: 14px;
-    border: 1px solid #d79bab; border-radius: 8px; overflow: hidden; width: fit-content;
+    display: flex; gap: 3px; margin-bottom: 16px;
+    background: #fff; border: 1px solid #ffd3e0; border-radius: 999px;
+    padding: 3px; width: fit-content; box-shadow: 0 3px 10px rgba(255, 110, 150, 0.1);
   }
   .grade-btn {
-    border: none; border-radius: 0; background: #fff; color: #954f65;
-    padding: 8px 20px; font-size: 0.92rem; font-weight: bold;
+    border: none; border-radius: 999px; background: transparent; color: #954f65;
+    padding: 8px 22px; font-size: 0.92rem; font-weight: 700; font-family: inherit;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
   }
-  .grade-btn + .grade-btn { border-left: 1px solid #d79bab; }
-  .grade-btn:hover { background: #fbe4e9; }
-  .grade-btn.active { background: #b5657d; color: #fff; }
-  .grade-btn.active:hover { background: #b5657d; }
+  .grade-btn:hover { background: #fff0f4; }
+  .grade-btn.active {
+    background: linear-gradient(135deg, #ff6f91, #ff9a56); color: #fff;
+    box-shadow: 0 3px 10px rgba(255, 110, 150, 0.35);
+  }
+  .grade-btn.active:hover { background: linear-gradient(135deg, #ff6f91, #ff9a56); }
 
   .test-panel {
-    background: #fff5f7; border: 1px solid #e8c3cd; border-radius: 8px;
-    padding: 12px 14px; margin-bottom: 20px;
+    background: linear-gradient(135deg, #fff6f8, #fff9f0);
+    border: 1px solid #ffd3e0; border-radius: 16px;
+    padding: 14px 16px; margin-bottom: 22px;
     display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    box-shadow: 0 4px 14px rgba(255, 154, 86, 0.12);
   }
-  .test-panel .label { font-weight: bold; color: #7a3b4e; font-size: 0.92rem; margin-right: 4px; }
+  .test-panel .label { font-weight: 800; color: #7a3b4e; font-size: 0.92rem; margin-right: 4px; }
   .test-panel .desc { color: #8a6470; font-size: 0.82rem; width: 100%; margin: -4px 0 2px; }
   .plainTestBtn, .mixedTestBtn {
-    background: #fff; border: 1px solid #d79bab; color: #954f65;
+    background: #fff; border: 1px solid #ffb4c6; color: #954f65;
   }
-  .plainTestBtn:hover, .mixedTestBtn:hover { background: #fbe4e9; }
+  .plainTestBtn:hover:not(:disabled), .mixedTestBtn:hover:not(:disabled) { background: #fff0f4; border-color: #ff5d8f; }
   .plainTestBtn:disabled, .mixedTestBtn:disabled { opacity: 0.5; }
 
   .unit-grid {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 10px;
+    gap: 12px;
   }
   .unit-card {
     display: flex; align-items: flex-start; gap: 10px;
-    background: #fff; border: 1px solid #f0d5dc; border-radius: 8px;
-    padding: 12px 14px; cursor: pointer; user-select: none;
+    background: #fff; border: 1px solid #f7dde6; border-radius: 14px;
+    padding: 13px 15px; cursor: pointer; user-select: none;
+    box-shadow: 0 2px 8px rgba(181, 101, 125, 0.06);
+    transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
   }
-  .unit-card:hover { border-color: #d79bab; }
-  .unit-card.checked { border-color: #b5657d; background: #fdeef1; }
-  .unit-card input { margin-top: 3px; width: 16px; height: 16px; flex-shrink: 0; accent-color: #b5657d; }
-  .unit-num { font-weight: bold; color: #b5657d; margin-right: 4px; }
+  .unit-card:hover { border-color: #ff9ab4; transform: translateY(-2px); box-shadow: 0 6px 16px rgba(255, 110, 150, 0.18); }
+  .unit-card.checked {
+    border-color: #ff5d8f; background: linear-gradient(135deg, #fff0f4, #fff8ee);
+    box-shadow: 0 4px 12px rgba(255, 93, 143, 0.2);
+  }
+  .unit-card input { margin-top: 3px; width: 17px; height: 17px; flex-shrink: 0; accent-color: #ff5d8f; }
+  .unit-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.5em; height: 1.5em; padding: 0 2px; margin-right: 6px;
+    font-weight: 800; color: #fff; font-size: 0.82em; border-radius: 999px;
+    background: linear-gradient(135deg, #ff6f91, #ff9a56);
+  }
   .unit-title { font-size: 0.95rem; line-height: 1.4; }
-  .unit-count { display: block; color: #a48890; font-size: 0.78rem; margin-top: 2px; }
+  .unit-count {
+    display: inline-block; color: #a15a6d; font-size: 0.74rem; font-weight: 700;
+    margin-top: 5px; background: #ffe9ef; border-radius: 999px; padding: 2px 9px;
+  }
 
   #printView { display: none; }
   #printView.active { display: block; }
@@ -99,6 +137,12 @@
     padding: 10px 16px; display: flex; gap: 10px; align-items: center;
   }
   .print-toolbar .spacer { flex: 1; }
+  .print-toolbar button { border-radius: 999px; }
+  .print-toolbar #printBtn {
+    color: #fff; border: none; background: linear-gradient(135deg, #ff6f91, #ff5d8f);
+    font-weight: 800; box-shadow: 0 4px 10px rgba(255, 93, 143, 0.35);
+  }
+  .print-toolbar #printBtn:hover { background: linear-gradient(135deg, #ff5d8f, #e8406f); }
 
   #printPaper {
     display: flex; flex-direction: column; align-items: center; gap: 10mm;
@@ -226,24 +270,24 @@
 <body>
 
 <div id="selectView">
-  <h1>漢字読みシートクリエーター</h1>
+  <h1>📝 漢字読みシートクリエーター</h1>
   <p class="subtitle">学年を選んで、単元（タイトル）を選び、読みプリントまたは確認テストを作成してください。</p>
   <div class="grade-switch" id="gradeSwitch">
     <button type="button" class="grade-btn active" data-grade="1">中学１年</button>
     <button type="button" class="grade-btn" data-grade="2">光村２年</button>
   </div>
   <div class="toolbar">
-    <button id="selectAllBtn" type="button">全選択</button>
-    <button id="clearBtn" type="button">クリア</button>
+    <button id="selectAllBtn" type="button">✅ 全選択</button>
+    <button id="clearBtn" type="button">🗑️ クリア</button>
     <span id="countLabel"></span>
-    <button id="generateBtn" type="button" disabled>読みプリントを作成 →</button>
-    <button id="readingTestBtn" type="button" disabled>読みテストを作成 →</button>
+    <button id="generateBtn" type="button" disabled>🖨️ 読みプリントを作成 →</button>
+    <button id="readingTestBtn" type="button" disabled>📋 読みテストを作成 →</button>
   </div>
   <div class="test-panel">
     <span class="desc">選択した単元の熟語から確認テスト（読みを書き込む形式）を作成します。問題1枚・解答1枚の構成です。</span>
-    <span class="label">チェックテスト作成：</span>
-    <button id="plainTestBtn" class="plainTestBtn" type="button" disabled>そのまま（単元順）</button>
-    <button id="mixedTestBtn" class="mixedTestBtn" type="button" disabled>ミックステスト（ランダム）</button>
+    <span class="label">✏️ チェックテスト作成：</span>
+    <button id="plainTestBtn" class="plainTestBtn" type="button" disabled>🎯 そのまま（単元順）</button>
+    <button id="mixedTestBtn" class="mixedTestBtn" type="button" disabled>🔀 ミックステスト（ランダム）</button>
   </div>
   <div class="unit-grid" id="unitGrid"></div>
 </div>
@@ -252,7 +296,7 @@
   <div class="print-toolbar no-print">
     <button id="backBtn" type="button">← 選択画面に戻る</button>
     <div class="spacer"></div>
-    <button id="printBtn" type="button">印刷する</button>
+    <button id="printBtn" type="button">🖨️ 印刷する</button>
   </div>
   <div id="printPaper">
     <div id="printContent"></div>
